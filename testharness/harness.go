@@ -57,7 +57,9 @@ func BuildWASM(pkg string) (string, error) {
 			return "", fmt.Errorf("wasm_exec.js not found: %w", err)
 		}
 	}
-	os.WriteFile(filepath.Join(dir, "wasm_exec.js"), data, 0644)
+	if err := os.WriteFile(filepath.Join(dir, "wasm_exec.js"), data, 0644); err != nil {
+		return "", fmt.Errorf("write wasm_exec.js: %w", err)
+	}
 
 	return dir, nil
 }
