@@ -31,7 +31,7 @@ func main() {
 	<-ready
 
 	var err error
-	db, err = sql.Open("sqlite3", "file:test.db?vfs=opfs")
+	db, err = sql.Open("sqlite3", "file:playground.db?vfs=opfs")
 	if err != nil {
 		js.Global().Call("_app_error", err.Error())
 		select {}
