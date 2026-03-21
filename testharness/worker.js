@@ -1,10 +1,9 @@
-// Web Worker: initializes OPFS handle pool, loads Go WASM test binary,
-// runs tests, and posts results back to the orchestrator.
-const POOL_SIZE = 6;
-const PREFIX = "sqlite3-opfs-test";
+// Web Worker: creates named OPFS files, loads Go WASM test binary,
+// registers handles, and runs tests.
+const DB_NAME = "test.db";
+const OPFS_DIR = "sqlite3-opfs";
 
-// Intercept console.log/error so Go test output (which wasm_exec.js sends
-// to console.log) gets forwarded via postMessage to the main page.
+// Intercept console so Go test output is forwarded via postMessage.
 const _origLog = console.log;
 const _origError = console.error;
 console.log = function(...args) {
@@ -20,28 +19,30 @@ function log(msg) {
     postMessage({ type: "log", text: msg });
 }
 
-async function initPool() {
+async function initHandles(dbName) {
     const root = await navigator.storage.getDirectory();
-    const dir = await root.getDirectoryHandle(PREFIX, { create: true });
-    const handles = [];
-    for (let i = 0; i < POOL_SIZE; i++) {
-        const fh = await dir.getFileHandle(`slot-${i}.db`, { create: true });
-        handles.push(await fh.createSyncAccessHandle());
+    const dir = await root.getDirectoryHandle(OPFS_DIR, { create: true });
+    const handles = {};
+    // Open all files SQLite may need for this database.
+    const suffixes = ["", "-journal", "-wal"];
+    for (const suffix of suffixes) {
+        const name = dbName + suffix;
+        const fh = await dir.getFileHandle(name, { create: true });
+        handles[name] = await fh.createSyncAccessHandle();
     }
     return handles;
 }
 
 async function run() {
     try {
-        log("Initializing OPFS pool...");
-        const handles = await initPool();
-        log(`Pool ready: ${handles.length} slots`);
+        log("Creating OPFS files for: " + DB_NAME);
+        const handles = await initHandles(DB_NAME);
+        log(`OPFS files ready: ${Object.keys(handles).join(", ")}`);
 
         log("Loading Go WASM test binary...");
         importScripts("wasm_exec.js");
         const go = new Go();
 
-        // Always run tests in verbose mode, and pass additional args if present.
         go.argv = ["test.wasm", "-test.v"];
         if (self._testArgs) {
             go.argv = go.argv.concat(self._testArgs);
@@ -54,13 +55,10 @@ async function run() {
         log("Starting Go WASM...");
         const exitPromise = go.run(result.instance);
 
-        // Register handles with Go pool.
         log("Registering OPFS handles...");
-        _opfs_pool_init(handles);
+        _opfs_init(handles);
 
         log("Running tests...");
-        // Tests run via Go's testing framework inside the WASM.
-        // Wait for the Go program to exit, then signal completion.
         await exitPromise;
         log("Go program exited.");
     } catch (e) {
@@ -77,5 +75,4 @@ self.onmessage = function(e) {
     }
 };
 
-// Auto-start.
 run();
