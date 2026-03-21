@@ -1,0 +1,9 @@
+# Reference implementations (local only, not tracked)
+_reference/
+
+# Build artifacts
+*.wasm
+bin/
+
+# Test artifacts
+spike/
