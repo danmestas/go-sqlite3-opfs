@@ -1,4 +1,4 @@
-# Reference implementations (local only, not tracked)
+# Reference implementations (local only)
 _reference/
 
 # Build artifacts
@@ -7,3 +7,14 @@ bin/
 
 # Test artifacts
 spike/
+
+# Agent configurations (per-user, not project)
+.agents/
+.claude/
+.crush/
+.goose/
+.kiro/
+.mux/
+.pi/
+skills/
+skills-lock.json
