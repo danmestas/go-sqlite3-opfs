@@ -18,3 +18,7 @@ spike/
 .pi/
 skills/
 skills-lock.json
+
+# Internal design docs (specs, plans)
+docs/specs/
+docs/plans/
