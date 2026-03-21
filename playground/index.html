@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OPFS VFS Playground</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+         background: #0d1117; color: #c9d1d9; padding: 20px; max-width: 1200px; margin: 0 auto; }
+  h1 { color: #58a6ff; margin-bottom: 4px; font-size: 1.5em; }
+  .subtitle { color: #8b949e; margin-bottom: 20px; font-size: 0.9em; }
+  .status { padding: 8px 12px; border-radius: 6px; margin-bottom: 16px; font-size: 0.85em; }
+  .status.loading { background: #1c2128; border: 1px solid #30363d; }
+  .status.ready { background: #0d1a0d; border: 1px solid #238636; color: #3fb950; }
+  .status.error { background: #1a0d0d; border: 1px solid #da3633; color: #f85149; }
+
+  .section { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+             padding: 16px; margin-bottom: 16px; }
+  .section h2 { color: #58a6ff; font-size: 1.1em; margin-bottom: 12px; }
+  .section h3 { color: #8b949e; font-size: 0.9em; margin-bottom: 8px; text-transform: uppercase;
+                letter-spacing: 0.05em; }
+
+  .examples { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .examples button { background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+                     padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8em;
+                     font-family: inherit; transition: all 0.15s; }
+  .examples button:hover { background: #30363d; border-color: #58a6ff; }
+  .examples button.cat { border-color: #388bfd44; }
+
+  textarea { width: 100%; height: 80px; background: #0d1117; border: 1px solid #30363d;
+             color: #c9d1d9; padding: 12px; border-radius: 6px; font-family: 'SF Mono', Monaco,
+             'Cascadia Code', monospace; font-size: 0.85em; resize: vertical; }
+  textarea:focus { outline: none; border-color: #58a6ff; }
+
+  .toolbar { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  .toolbar button { background: #238636; border: none; color: white; padding: 8px 20px;
+                    border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85em; }
+  .toolbar button:hover { background: #2ea043; }
+  .toolbar button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+  .toolbar .hint { color: #484f58; font-size: 0.8em; }
+
+  .results { margin-top: 12px; overflow-x: auto; }
+  .results table { width: 100%; border-collapse: collapse; font-size: 0.82em; }
+  .results th { background: #21262d; color: #58a6ff; text-align: left; padding: 8px 12px;
+                border-bottom: 2px solid #30363d; font-weight: 600; white-space: nowrap; }
+  .results td { padding: 6px 12px; border-bottom: 1px solid #21262d; max-width: 300px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .results tr:hover td { background: #161b2288; }
+  .results .meta { color: #8b949e; font-size: 0.85em; margin-top: 6px; }
+  .results .error { color: #f85149; padding: 12px; background: #1a0d0d; border-radius: 6px; }
+
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+              gap: 8px; }
+  .feature { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px; }
+  .feature .check { color: #3fb950; margin-right: 4px; }
+  .feature .name { font-weight: 600; }
+  .feature .desc { color: #8b949e; font-size: 0.8em; margin-top: 2px; }
+
+  .schema-item { background: #0d1117; border: 1px solid #30363d; border-radius: 4px;
+                 padding: 8px 12px; margin-bottom: 4px; font-size: 0.82em; }
+  .schema-item .type { color: #d2a8ff; font-size: 0.75em; text-transform: uppercase;
+                       margin-right: 6px; }
+  .schema-item .name { color: #79c0ff; font-weight: 600; }
+  .schema-item code { display: block; color: #8b949e; margin-top: 4px; font-size: 0.9em;
+                      white-space: pre-wrap; word-break: break-all; }
+
+  #log { font-size: 0.75em; color: #484f58; max-height: 100px; overflow-y: auto;
+         margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>OPFS VFS Playground</h1>
+<p class="subtitle">SQLite running in a browser Worker via OPFS &mdash; powered by ncruces/go-sqlite3</p>
+
+<div id="status" class="status loading">Initializing OPFS and loading WASM...</div>
+
+<div class="section">
+  <h2>Validated Features</h2>
+  <div class="features">
+    <div class="feature"><span class="check">&#10003;</span><span class="name">FTS5</span><div class="desc">Full-text search</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">Foreign Keys</span><div class="desc">CASCADE, SET NULL</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">Triggers</span><div class="desc">AFTER INSERT/UPDATE</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">JSON</span><div class="desc">json_extract, json_object</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">Views</span><div class="desc">Multi-table JOIN</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">Generated Cols</span><div class="desc">STORED computed</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">Window Funcs</span><div class="desc">RANK, ROW_NUMBER</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">Recursive CTE</span><div class="desc">WITH RECURSIVE</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">BLOB Storage</span><div class="desc">Binary data</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">Indexes</span><div class="desc">B-tree indexes</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">Transactions</span><div class="desc">COMMIT / ROLLBACK</div></div>
+    <div class="feature"><span class="check">&#10003;</span><span class="name">WAL Mode</span><div class="desc">Exclusive locking</div></div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>SQL Playground</h2>
+  <h3>Example Queries</h3>
+  <div class="examples">
+    <button onclick="setQuery(`SELECT * FROM users`)">All Users</button>
+    <button onclick="setQuery(`SELECT * FROM post_summary`)">Post Summary (View)</button>
+    <button onclick="setQuery(`SELECT title FROM posts_fts WHERE posts_fts MATCH 'browser OR wasm'`)">FTS5 Search</button>
+    <button onclick="setQuery(`SELECT name, json_extract(profile_json, '$.role') AS role FROM users`)">JSON Extract</button>
+    <button onclick="setQuery(`SELECT name, display_name FROM users`)">Generated Column</button>
+    <button onclick="setQuery(`SELECT name, RANK() OVER (ORDER BY score DESC) AS rank FROM users`)">Window Function</button>
+    <button class="cat" onclick="setQuery(`WITH RECURSIVE thread(id, body, depth) AS (\n  SELECT id, body, 0 FROM comments WHERE post_id=1 AND parent_id IS NULL\n  UNION ALL\n  SELECT c.id, c.body, t.depth+1 FROM comments c JOIN thread t ON c.parent_id=t.id\n)\nSELECT * FROM thread`)">Recursive CTE</button>
+    <button class="cat" onclick="setQuery(`SELECT * FROM audit_log ORDER BY id DESC LIMIT 10`)">Audit Log (Triggers)</button>
+    <button class="cat" onclick="setQuery(`SELECT p.title, count(c.id) AS comments\nFROM posts p LEFT JOIN comments c ON c.post_id = p.id\nGROUP BY p.id ORDER BY comments DESC`)">Aggregate Join</button>
+    <button class="cat" onclick="setQuery(`PRAGMA integrity_check`)">Integrity Check</button>
+    <button class="cat" onclick="setQuery(`SELECT type, name FROM sqlite_master ORDER BY type, name`)">Schema</button>
+  </div>
+
+  <textarea id="sql" placeholder="Type SQL here... (Ctrl+Enter to run)" spellcheck="false">SELECT * FROM users</textarea>
+  <div class="toolbar">
+    <button id="run" onclick="runQuery()" disabled>Run Query</button>
+    <span class="hint">Ctrl+Enter</span>
+  </div>
+  <div id="results" class="results"></div>
+</div>
+
+<div class="section" id="schema-section" style="display:none">
+  <h2>Database Schema</h2>
+  <div id="schema-list"></div>
+</div>
+
+<pre id="log"></pre>
+
+<script>
+const worker = new Worker("worker.js");
+const statusEl = document.getElementById("status");
+const resultsEl = document.getElementById("results");
+const sqlEl = document.getElementById("sql");
+const runBtn = document.getElementById("run");
+const logEl = document.getElementById("log");
+
+let isReady = false;
+
+worker.onmessage = function(e) {
+    const msg = e.data;
+
+    if (msg.type === "ready") {
+        isReady = true;
+        statusEl.className = "status ready";
+        statusEl.textContent = "Ready \u2014 SQLite running in OPFS via WebAssembly";
+        runBtn.disabled = false;
+        // Load schema
+        worker.postMessage({ type: "schema" });
+        // Auto-run first query
+        runQuery();
+    } else if (msg.type === "result") {
+        displayResult(msg.data);
+    } else if (msg.type === "schema") {
+        displaySchema(msg.data);
+    } else if (msg.type === "error") {
+        statusEl.className = "status error";
+        statusEl.textContent = "Error: " + msg.text;
+    } else if (msg.type === "log") {
+        logEl.textContent += msg.text + "\n";
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+};
+
+function setQuery(sql) {
+    sqlEl.value = sql;
+    if (isReady) runQuery();
+}
+
+function runQuery() {
+    if (!isReady) return;
+    const sql = sqlEl.value.trim();
+    if (!sql) return;
+    resultsEl.innerHTML = '<div style="color:#8b949e">Running...</div>';
+    worker.postMessage({ type: "query", sql: sql });
+}
+
+function displayResult(dataStr) {
+    try {
+        const data = JSON.parse(dataStr);
+        if (data.error) {
+            resultsEl.innerHTML = '<div class="error">' + escapeHtml(data.error) + '</div>';
+            return;
+        }
+        if (!data.columns || data.columns.length === 0) {
+            resultsEl.innerHTML = '<div class="meta">Query executed. No results.</div>';
+            return;
+        }
+
+        let html = '<table><thead><tr>';
+        for (const col of data.columns) {
+            html += '<th>' + escapeHtml(col) + '</th>';
+        }
+        html += '</tr></thead><tbody>';
+        for (const row of (data.rows || [])) {
+            html += '<tr>';
+            for (const col of data.columns) {
+                const val = row[col];
+                html += '<td title="' + escapeHtml(String(val)) + '">' + escapeHtml(formatVal(val)) + '</td>';
+            }
+            html += '</tr>';
+        }
+        html += '</tbody></table>';
+        html += '<div class="meta">' + data.count + ' row' + (data.count !== 1 ? 's' : '') + '</div>';
+        resultsEl.innerHTML = html;
+    } catch (e) {
+        resultsEl.innerHTML = '<div class="error">Parse error: ' + escapeHtml(e.message) + '</div>';
+    }
+}
+
+function displaySchema(dataStr) {
+    try {
+        const items = JSON.parse(dataStr);
+        if (items.error) return;
+        const section = document.getElementById("schema-section");
+        section.style.display = "block";
+        const list = document.getElementById("schema-list");
+        let html = "";
+        for (const item of items) {
+            if (!item.sql) continue;
+            html += '<div class="schema-item">';
+            html += '<span class="type">' + item.type + '</span>';
+            html += '<span class="name">' + escapeHtml(item.name) + '</span>';
+            html += '<code>' + escapeHtml(item.sql) + '</code></div>';
+        }
+        list.innerHTML = html;
+    } catch (e) { /* ignore */ }
+}
+
+function formatVal(v) {
+    if (v === null) return "NULL";
+    if (typeof v === "string" && v.length > 80) return v.slice(0, 77) + "...";
+    return String(v);
+}
+
+function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+sqlEl.addEventListener("keydown", function(e) {
+    if (e.ctrlKey && e.key === "Enter") { e.preventDefault(); runQuery(); }
+});
+</script>
+</body>
+</html>
