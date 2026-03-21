@@ -2,31 +2,13 @@ package opfsvfs
 
 import "time"
 
-// PoolEventType classifies pool lifecycle events.
-type PoolEventType int
-
-const (
-	PoolEventAlloc   PoolEventType = iota // new slot assigned
-	PoolEventRelease                       // slot released
-	PoolEventFull                          // pool exhausted
-	PoolEventMeta                          // metadata written
-)
-
-// PoolEvent describes a pool lifecycle event.
-type PoolEvent struct {
-	Type PoolEventType
-	Name string // virtual filename
-	Slot int    // slot index, -1 if not applicable
-}
-
-// Observer receives callbacks for I/O operations and pool events.
+// Observer receives callbacks for I/O operations.
 // Pass nil for no-op. Implementations must be safe for concurrent use.
 type Observer interface {
 	OnRead(file string, offset int64, bytes int, duration time.Duration, err error)
 	OnWrite(file string, offset int64, bytes int, duration time.Duration, err error)
 	OnFlush(file string, duration time.Duration, err error)
 	OnError(err *OpfsError)
-	OnPoolEvent(event PoolEvent)
 }
 
 // nopObserver implements Observer as no-ops.
@@ -36,7 +18,6 @@ func (nopObserver) OnRead(string, int64, int, time.Duration, error) {}
 func (nopObserver) OnWrite(string, int64, int, time.Duration, error) {}
 func (nopObserver) OnFlush(string, time.Duration, error) {}
 func (nopObserver) OnError(*OpfsError) {}
-func (nopObserver) OnPoolEvent(PoolEvent) {}
 
 func resolveObserver(obs Observer) Observer {
 	if obs == nil {
@@ -47,11 +28,10 @@ func resolveObserver(obs Observer) Observer {
 
 // RecordingObserver captures all events for test assertions.
 type RecordingObserver struct {
-	Reads      []ReadEvent
-	Writes     []WriteEvent
-	Flushes    []FlushEvent
-	Errors     []*OpfsError
-	PoolEvents []PoolEvent
+	Reads   []ReadEvent
+	Writes  []WriteEvent
+	Flushes []FlushEvent
+	Errors  []*OpfsError
 }
 
 type ReadEvent struct {
@@ -90,10 +70,6 @@ func (r *RecordingObserver) OnFlush(file string, dur time.Duration, err error) {
 
 func (r *RecordingObserver) OnError(err *OpfsError) {
 	r.Errors = append(r.Errors, err)
-}
-
-func (r *RecordingObserver) OnPoolEvent(event PoolEvent) {
-	r.PoolEvents = append(r.PoolEvents, event)
 }
 
 // Verify interface compliance.

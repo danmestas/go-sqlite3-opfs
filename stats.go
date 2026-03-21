@@ -14,9 +14,6 @@ type Stats struct {
 	ReadTimeNs   atomic.Int64
 	WriteTimeNs  atomic.Int64
 	FlushTimeNs  atomic.Int64
-	SlotHits     atomic.Int64
-	SlotAllocs   atomic.Int64
-	SlotFull     atomic.Int64
 }
 
 // Snapshot returns a non-atomic copy of all counters.
@@ -24,7 +21,6 @@ type StatsSnapshot struct {
 	Reads, Writes, Flushes             int64
 	BytesRead, BytesWritten            int64
 	ReadTimeNs, WriteTimeNs, FlushTimeNs int64
-	SlotHits, SlotAllocs, SlotFull     int64
 }
 
 // Snapshot returns a point-in-time copy of the counters.
@@ -38,9 +34,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		ReadTimeNs:   s.ReadTimeNs.Load(),
 		WriteTimeNs:  s.WriteTimeNs.Load(),
 		FlushTimeNs:  s.FlushTimeNs.Load(),
-		SlotHits:     s.SlotHits.Load(),
-		SlotAllocs:   s.SlotAllocs.Load(),
-		SlotFull:     s.SlotFull.Load(),
 	}
 }
 
@@ -54,7 +47,4 @@ func (s *Stats) Reset() {
 	s.ReadTimeNs.Store(0)
 	s.WriteTimeNs.Store(0)
 	s.FlushTimeNs.Store(0)
-	s.SlotHits.Store(0)
-	s.SlotAllocs.Store(0)
-	s.SlotFull.Store(0)
 }
