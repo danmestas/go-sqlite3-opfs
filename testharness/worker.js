@@ -38,7 +38,7 @@ async function run() {
         );
 
         log("Starting Go WASM...");
-        go.run(result.instance);
+        const exitPromise = go.run(result.instance);
 
         // Register handles with Go pool.
         log("Registering OPFS handles...");
@@ -46,7 +46,9 @@ async function run() {
 
         log("Running tests...");
         // Tests run via Go's testing framework inside the WASM.
-        // Results are captured by the runner and posted back.
+        // Wait for the Go program to exit, then signal completion.
+        await exitPromise;
+        log("Go program exited.");
     } catch (e) {
         postMessage({ type: "error", text: e.message + "\n" + e.stack });
     }

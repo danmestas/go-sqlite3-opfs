@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -79,7 +80,9 @@ func CopyTestAssets(buildDir, assetsDir string) error {
 }
 
 // RunInBrowser launches headless Chrome, navigates to the test page,
-// and collects console messages until "DONE" or timeout.
+// and collects console messages until tests complete or timeout.
+// Completion is detected by polling the #log element for a "done" message
+// posted by the Go test binary via testharness.PostDone.
 func RunInBrowser(url string, timeout time.Duration) ([]ConsoleMsg, error) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
@@ -96,18 +99,69 @@ func RunInBrowser(url string, timeout time.Duration) ([]ConsoleMsg, error) {
 
 	var msgs []ConsoleMsg
 
+	// Capture main-thread console messages (errors, logs from index.html).
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
-		// Collect console.log messages from the Worker.
-		// The test runner posts structured JSON messages.
+		if consoleEv, ok := ev.(*runtime.EventConsoleAPICalled); ok {
+			for _, arg := range consoleEv.Args {
+				text := strings.Trim(string(arg.Value), `"`)
+				msgs = append(msgs, ConsoleMsg{
+					Type: string(consoleEv.Type),
+					Text: text,
+				})
+			}
+		}
 	})
 
-	err := chromedp.Run(ctx,
+	// Navigate and enable runtime events so we get console messages.
+	if err := chromedp.Run(ctx,
+		runtime.Enable(),
 		chromedp.Navigate(url),
-		chromedp.WaitVisible("#log", chromedp.ByID),
-		chromedp.Sleep(timeout), // Wait for tests to complete.
-	)
+	); err != nil {
+		return msgs, fmt.Errorf("navigate: %w", err)
+	}
 
-	return msgs, err
+	// Poll the #log div for the "done" message posted by the Worker.
+	// The index.html page appends all Worker postMessage data as JSON lines.
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return msgs, fmt.Errorf("timeout waiting for test completion: %w", ctx.Err())
+		case <-ticker.C:
+			var logText string
+			err := chromedp.Run(ctx,
+				chromedp.Text("#log", &logText, chromedp.ByID),
+			)
+			if err != nil {
+				continue // element may not exist yet
+			}
+			if strings.Contains(logText, `"type":"done"`) {
+				// Parse individual lines into ConsoleMsg entries.
+				for _, line := range strings.Split(logText, "\n") {
+					line = strings.TrimSpace(line)
+					if line == "" {
+						continue
+					}
+					msgs = append(msgs, ConsoleMsg{Type: "worker", Text: line})
+				}
+				return msgs, nil
+			}
+			// Also check for error messages from the Worker.
+			if strings.Contains(logText, `"type":"error"`) && !strings.Contains(logText, `"type":"log"`) {
+				// Only error, no log — likely a fatal error before tests ran.
+				for _, line := range strings.Split(logText, "\n") {
+					line = strings.TrimSpace(line)
+					if line == "" {
+						continue
+					}
+					msgs = append(msgs, ConsoleMsg{Type: "worker", Text: line})
+				}
+				return msgs, fmt.Errorf("worker error detected in log")
+			}
+		}
+	}
 }
 
 // ConsoleMsg represents a message from the browser console.
