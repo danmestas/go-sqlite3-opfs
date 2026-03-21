@@ -24,9 +24,10 @@ func DefaultOptions() Options {
 
 // global state set during init
 var (
-	globalPool *Pool
-	globalVFS  *opfsVFS
-	globalOpts Options
+	globalPool  *Pool
+	globalVFS   *opfsVFS
+	globalOpts  Options
+	poolReady   = make(chan struct{}) // closed when _opfs_pool_init completes
 )
 
 func init() {
@@ -60,6 +61,7 @@ func Register() {
 		}
 
 		vfs.Register(globalOpts.Name, globalVFS)
+		close(poolReady)
 		return nil
 	}))
 

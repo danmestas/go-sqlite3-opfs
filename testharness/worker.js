@@ -3,6 +3,19 @@
 const POOL_SIZE = 6;
 const PREFIX = "sqlite3-opfs-test";
 
+// Intercept console.log/error so Go test output (which wasm_exec.js sends
+// to console.log) gets forwarded via postMessage to the main page.
+const _origLog = console.log;
+const _origError = console.error;
+console.log = function(...args) {
+    postMessage({ type: "stdout", text: args.join(" ") });
+    _origLog.apply(console, args);
+};
+console.error = function(...args) {
+    postMessage({ type: "stderr", text: args.join(" ") });
+    _origError.apply(console, args);
+};
+
 function log(msg) {
     postMessage({ type: "log", text: msg });
 }
@@ -28,9 +41,10 @@ async function run() {
         importScripts("wasm_exec.js");
         const go = new Go();
 
-        // Pass test flags via argv if present.
+        // Always run tests in verbose mode, and pass additional args if present.
+        go.argv = ["test.wasm", "-test.v"];
         if (self._testArgs) {
-            go.argv = ["test.wasm"].concat(self._testArgs);
+            go.argv = go.argv.concat(self._testArgs);
         }
 
         const result = await WebAssembly.instantiateStreaming(
