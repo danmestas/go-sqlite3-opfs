@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>OPFS VFS Tests</title></head>
+<body>
+<pre id="log"></pre>
+<script>
+const worker = new Worker("worker.js");
+worker.onmessage = function(e) {
+    const msg = e.data;
+    document.getElementById("log").textContent += JSON.stringify(msg) + "\n";
+};
+</script>
+</body>
+</html>
