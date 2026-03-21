@@ -15,7 +15,7 @@ import (
 
 	"github.com/danmestas/go-sqlite3-opfs/testharness"
 	_ "github.com/ncruces/go-sqlite3/driver"
-	_ "github.com/ncruces/go-sqlite3/embed"
+
 )
 
 // TestValidationDump creates a feature-rich database and dumps raw bytes.

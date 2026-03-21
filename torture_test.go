@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
-	_ "github.com/ncruces/go-sqlite3/embed"
+
 )
 
 func TestTortureLargeDB(t *testing.T) {
