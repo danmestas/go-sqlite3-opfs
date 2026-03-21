@@ -23,7 +23,7 @@ import (
 
 	"github.com/danmestas/go-sqlite3-opfs/testharness"
 	_ "github.com/ncruces/go-sqlite3/driver"
-	_ "github.com/ncruces/go-sqlite3/embed"
+
 )
 
 func runBrowserTests(t *testing.T) []testharness.ConsoleMsg {

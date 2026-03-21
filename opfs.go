@@ -26,6 +26,10 @@ type opfsVFS struct {
 }
 
 // opfsFile implements vfs.File backed by a named OPFS Handle.
+//
+// Lock state is per-instance because this VFS targets single-connection
+// OPFS Workers (SetMaxOpenConns(1)). SQLite never opens the same database
+// file twice in this architecture — concurrent opens require separate Workers.
 type opfsFile struct {
 	handle   Handle
 	name     string
@@ -106,14 +110,17 @@ func (f *opfsFile) ReadAt(b []byte, off int64) (int, error) {
 	n, err := f.handle.Read(b, off)
 	dur := time.Since(start)
 
+	// Normalize short read to io.EOF before reporting to observer/stats,
+	// so telemetry matches what the caller sees.
+	if n < len(b) && err == nil {
+		err = io.EOF
+	}
+
 	f.stats.Reads.Add(1)
 	f.stats.BytesRead.Add(int64(n))
 	f.stats.ReadTimeNs.Add(dur.Nanoseconds())
 	f.observer.OnRead(f.name, off, n, dur, err)
 
-	if n < len(b) && err == nil {
-		return n, io.EOF
-	}
 	return n, err
 }
 
@@ -129,16 +136,16 @@ func (f *opfsFile) WriteAt(b []byte, off int64) (int, error) {
 	n, err := f.handle.Write(b, off)
 	dur := time.Since(start)
 
+	// Normalize short write to error before reporting to observer/stats.
+	// SQLite expects writes to be complete or return an error.
+	if n < len(b) && err == nil {
+		err = fmt.Errorf("opfsvfs: short write: wrote %d of %d bytes", n, len(b))
+	}
+
 	f.stats.Writes.Add(1)
 	f.stats.BytesWritten.Add(int64(n))
 	f.stats.WriteTimeNs.Add(dur.Nanoseconds())
 	f.observer.OnWrite(f.name, off, n, dur, err)
-
-	// Postcondition: a short write without error is a data corruption vector.
-	// SQLite expects writes to be complete or return an error.
-	if n < len(b) && err == nil {
-		return n, fmt.Errorf("opfsvfs: short write: wrote %d of %d bytes", n, len(b))
-	}
 
 	return n, err
 }
@@ -191,9 +198,12 @@ func (f *opfsFile) LockState() vfs.LockLevel { return f.lock }
 // sizes. OPFS does not expose its internal block size.
 func (f *opfsFile) SectorSize() int { return 4096 }
 
+// DeviceCharacteristics reports OPFS capabilities to SQLite.
+// IOCAP_POWERSAFE_OVERWRITE is NOT set because the OPFS spec does not
+// guarantee that property — omitting it makes SQLite use safer (slower)
+// crash-recovery assumptions.
 func (f *opfsFile) DeviceCharacteristics() vfs.DeviceCharacteristic {
 	return vfs.IOCAP_ATOMIC |
 		vfs.IOCAP_SEQUENTIAL |
-		vfs.IOCAP_SAFE_APPEND |
-		vfs.IOCAP_POWERSAFE_OVERWRITE
+		vfs.IOCAP_SAFE_APPEND
 }

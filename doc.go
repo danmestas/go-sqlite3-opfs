@@ -11,7 +11,6 @@
 //	    "database/sql"
 //	    _ "github.com/danmestas/go-sqlite3-opfs"
 //	    _ "github.com/ncruces/go-sqlite3/driver"
-//	    _ "github.com/ncruces/go-sqlite3/embed"
 //	)
 //
 //	db, err := sql.Open("sqlite3", "file:mydb.db?vfs=opfs")

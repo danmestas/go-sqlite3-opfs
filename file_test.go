@@ -145,7 +145,7 @@ func TestFileLockStateMachine(t *testing.T) {
 func TestFileDeviceCharacteristics(t *testing.T) {
 	f := openTestFile(t)
 	chars := f.DeviceCharacteristics()
-	expected := vfs.IOCAP_ATOMIC | vfs.IOCAP_SEQUENTIAL | vfs.IOCAP_SAFE_APPEND | vfs.IOCAP_POWERSAFE_OVERWRITE
+	expected := vfs.IOCAP_ATOMIC | vfs.IOCAP_SEQUENTIAL | vfs.IOCAP_SAFE_APPEND
 	if chars != expected {
 		t.Fatalf("DeviceCharacteristics: got 0x%x, want 0x%x", chars, expected)
 	}

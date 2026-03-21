@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
-	_ "github.com/ncruces/go-sqlite3/embed"
+
 )
 
 func openTestDB(t *testing.T) *sql.DB {
