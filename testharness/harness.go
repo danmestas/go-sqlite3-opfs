@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/runtime"
@@ -93,25 +94,45 @@ func CopyTestAssets(buildDir, assetsDir string) error {
 
 // RunInBrowser launches headless Chrome, navigates to the test page,
 // and collects console messages until tests complete or timeout.
-// Completion is detected by polling the #log element for a "done" message
-// posted by the Go test binary via testharness.PostDone.
 func RunInBrowser(url string, timeout time.Duration) ([]ConsoleMsg, error) {
 	if url == "" {
-		panic("testharness: RunInBrowser url must not be empty")
+		return nil, fmt.Errorf("testharness: RunInBrowser url must not be empty")
 	}
 
 	ctx, msgs, cleanup, err := launchBrowser(url, timeout)
 	if err != nil {
-		return *msgs, err
+		return msgs.snapshot(), err
 	}
 	defer cleanup()
 
 	return pollForCompletion(ctx, msgs)
 }
 
+// syncMsgs provides thread-safe access to collected console messages.
+// The chromedp ListenTarget callback fires on a CDP goroutine while
+// polling runs on the test goroutine — both access the same slice.
+type syncMsgs struct {
+	mu   sync.Mutex
+	msgs []ConsoleMsg
+}
+
+func (s *syncMsgs) append(msg ConsoleMsg) {
+	s.mu.Lock()
+	s.msgs = append(s.msgs, msg)
+	s.mu.Unlock()
+}
+
+func (s *syncMsgs) snapshot() []ConsoleMsg {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]ConsoleMsg, len(s.msgs))
+	copy(cp, s.msgs)
+	return cp
+}
+
 // launchBrowser creates a Chrome context and navigates to the URL.
 func launchBrowser(url string, timeout time.Duration) (
-	context.Context, *[]ConsoleMsg, func(), error,
+	context.Context, *syncMsgs, func(), error,
 ) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
@@ -127,14 +148,15 @@ func launchBrowser(url string, timeout time.Duration) (
 		allocCancel()
 	}
 
-	msgs := &[]ConsoleMsg{}
+	msgs := &syncMsgs{}
 
 	// Capture main-thread console messages.
+	// This callback fires on a CDP goroutine — syncMsgs provides safe access.
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		if consoleEv, ok := ev.(*runtime.EventConsoleAPICalled); ok {
 			for _, arg := range consoleEv.Args {
 				text := strings.Trim(string(arg.Value), `"`)
-				*msgs = append(*msgs, ConsoleMsg{
+				msgs.append(ConsoleMsg{
 					Type: string(consoleEv.Type),
 					Text: text,
 				})
@@ -154,7 +176,7 @@ func launchBrowser(url string, timeout time.Duration) (
 }
 
 // pollForCompletion polls the #log div until "done" or error is detected.
-func pollForCompletion(ctx context.Context, msgs *[]ConsoleMsg) ([]ConsoleMsg, error) {
+func pollForCompletion(ctx context.Context, msgs *syncMsgs) ([]ConsoleMsg, error) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -162,7 +184,7 @@ func pollForCompletion(ctx context.Context, msgs *[]ConsoleMsg) ([]ConsoleMsg, e
 	for polls := 0; polls < maxPolls; polls++ {
 		select {
 		case <-ctx.Done():
-			return *msgs, fmt.Errorf("timeout waiting for test completion: %w", ctx.Err())
+			return msgs.snapshot(), fmt.Errorf("timeout waiting for test completion: %w", ctx.Err())
 		case <-ticker.C:
 			var logText string
 			if err := chromedp.Run(ctx,
@@ -170,32 +192,33 @@ func pollForCompletion(ctx context.Context, msgs *[]ConsoleMsg) ([]ConsoleMsg, e
 			); err != nil {
 				continue
 			}
-			if result, err := parseLogResult(logText, msgs); result {
-				return *msgs, err
+			if done, err := parseLogResult(logText, msgs); done {
+				return msgs.snapshot(), err
 			}
 		}
 	}
-	return *msgs, fmt.Errorf("exceeded maximum poll count (%d)", maxPolls)
+	return msgs.snapshot(), fmt.Errorf("exceeded maximum poll count (%d)", maxPolls)
 }
 
 // parseLogResult checks log text for done/error markers and appends lines to msgs.
-func parseLogResult(logText string, msgs *[]ConsoleMsg) (done bool, err error) {
+func parseLogResult(logText string, msgs *syncMsgs) (done bool, err error) {
 	if strings.Contains(logText, `"type":"done"`) {
 		appendLogLines(logText, msgs)
 		return true, nil
 	}
-	if strings.Contains(logText, `"type":"error"`) && !strings.Contains(logText, `"type":"log"`) {
+	// Detect worker errors regardless of whether log messages also exist.
+	if strings.Contains(logText, `"type":"error"`) {
 		appendLogLines(logText, msgs)
 		return true, fmt.Errorf("worker error detected in log")
 	}
 	return false, nil
 }
 
-func appendLogLines(logText string, msgs *[]ConsoleMsg) {
+func appendLogLines(logText string, msgs *syncMsgs) {
 	for _, line := range strings.Split(logText, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
-			*msgs = append(*msgs, ConsoleMsg{Type: "worker", Text: line})
+			msgs.append(ConsoleMsg{Type: "worker", Text: line})
 		}
 	}
 }

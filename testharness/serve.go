@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 )
 
 // Server serves test files with COOP/COEP headers required for SharedArrayBuffer.
@@ -19,6 +20,14 @@ type Server struct {
 
 // NewServer creates a test server for the given directory on a random port.
 func NewServer(dir string) (*Server, error) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("testharness: invalid server dir: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("testharness: %s is not a directory", dir)
+	}
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("testharness: listen: %w", err)
