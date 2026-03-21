@@ -3,6 +3,7 @@
 package opfsvfs
 
 import (
+	"sync"
 	"syscall/js"
 
 	"github.com/ncruces/go-sqlite3/vfs"
@@ -21,10 +22,12 @@ func DefaultOptions() Options {
 	}
 }
 
+// Safe without synchronization: Go WASM is single-threaded.
 var (
 	globalVFS  *opfsVFS
 	globalOpts Options
 	initReady  = make(chan struct{}) // closed when _opfs_init completes
+	registered sync.Once            // prevents double-Register panic
 )
 
 func init() {
@@ -32,50 +35,65 @@ func init() {
 }
 
 // Register registers the _opfs_init and _opfs_stats JS callbacks.
+// Safe to call multiple times — only the first call takes effect.
 func Register() {
-	globalOpts = DefaultOptions()
+	registered.Do(func() {
+		globalOpts = DefaultOptions()
 
-	js.Global().Set("_opfs_init", js.FuncOf(func(this js.Value, args []js.Value) any {
-		if len(args) < 1 {
-			panic("opfsvfs: _opfs_init requires 1 argument (handles object)")
-		}
+		js.Global().Set("_opfs_init", js.FuncOf(initCallback))
+		js.Global().Set("_opfs_stats", js.FuncOf(statsCallback))
+	})
+}
 
-		jsHandles := args[0]
-		keys := js.Global().Get("Object").Call("keys", jsHandles)
-		handles := make(map[string]Handle, keys.Length())
-		for i := 0; i < keys.Length(); i++ {
-			name := keys.Index(i).String()
-			handles[name] = newJSHandle(jsHandles.Get(name), name, name)
-		}
+// initCallback handles the _opfs_init JS call. Extracted for testability.
+func initCallback(_ js.Value, args []js.Value) any {
+	if len(args) < 1 {
+		panic("opfsvfs: _opfs_init requires 1 argument (handles object)")
+	}
 
-		globalVFS = &opfsVFS{
-			handles:  handles,
-			stats:    &Stats{},
-			observer: resolveObserver(globalOpts.Observer),
-		}
+	jsHandles := args[0]
+	keys := js.Global().Get("Object").Call("keys", jsHandles)
+	if keys.Length() == 0 {
+		panic("opfsvfs: _opfs_init received empty handles map")
+	}
 
-		vfs.Register(globalOpts.Name, globalVFS)
-		close(initReady)
+	handles := make(map[string]Handle, keys.Length())
+	for i := 0; i < keys.Length(); i++ {
+		name := keys.Index(i).String()
+		handles[name] = newJSHandle(jsHandles.Get(name), name)
+	}
+
+	globalVFS = &opfsVFS{
+		handles:  handles,
+		stats:    &Stats{},
+		observer: resolveObserver(globalOpts.Observer),
+	}
+
+	vfs.Register(globalOpts.Name, globalVFS)
+	close(initReady)
+	return nil
+}
+
+// statsCallback handles the _opfs_stats JS call.
+func statsCallback(_ js.Value, _ []js.Value) any {
+	if globalVFS == nil {
 		return nil
-	}))
-
-	js.Global().Set("_opfs_stats", js.FuncOf(func(this js.Value, args []js.Value) any {
-		if globalVFS == nil {
-			return nil
-		}
-		snap := globalVFS.stats.Snapshot()
-		obj := js.Global().Get("Object").New()
-		obj.Set("reads", snap.Reads)
-		obj.Set("writes", snap.Writes)
-		obj.Set("flushes", snap.Flushes)
-		obj.Set("bytesRead", snap.BytesRead)
-		obj.Set("bytesWritten", snap.BytesWritten)
-		return obj
-	}))
+	}
+	snap := globalVFS.stats.Snapshot()
+	obj := js.Global().Get("Object").New()
+	obj.Set("reads", snap.Reads)
+	obj.Set("writes", snap.Writes)
+	obj.Set("flushes", snap.Flushes)
+	obj.Set("bytesRead", snap.BytesRead)
+	obj.Set("bytesWritten", snap.BytesWritten)
+	return obj
 }
 
 // New sets custom options. Must be called before _opfs_init.
 func New(opts Options) {
+	if globalVFS != nil {
+		panic("opfsvfs: New called after _opfs_init — options must be set before initialization")
+	}
 	if opts.Name == "" {
 		opts.Name = "opfs"
 	}

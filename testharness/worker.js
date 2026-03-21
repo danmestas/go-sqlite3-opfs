@@ -1,7 +1,15 @@
 // Web Worker: creates named OPFS files, loads Go WASM test binary,
 // registers handles, and runs tests.
+//
+// Why a Worker? OPFS createSyncAccessHandle() only works in dedicated Workers.
+// Why intercept console? Go WASM stdout goes to console.log in the Worker,
+// which is invisible to chromedp. Forwarding via postMessage makes it visible.
+// Why _opfs_init after go.run? Go's init() registers _opfs_init during go.run(),
+// so it must be called after go.run() starts but before tests need the VFS.
+
 const DB_NAME = "test.db";
 const OPFS_DIR = "sqlite3-opfs";
+const RUN_TIMEOUT_MS = 120000; // 2 minutes max for test execution.
 
 // Intercept console so Go test output is forwarded via postMessage.
 const _origLog = console.log;
@@ -23,7 +31,6 @@ async function initHandles(dbName) {
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle(OPFS_DIR, { create: true });
     const handles = {};
-    // Open all files SQLite may need for this database.
     const suffixes = ["", "-journal", "-wal"];
     for (const suffix of suffixes) {
         const name = dbName + suffix;
@@ -55,24 +62,22 @@ async function run() {
         log("Starting Go WASM...");
         const exitPromise = go.run(result.instance);
 
+        // _opfs_init is available because Go's init() registered it during go.run().
         log("Registering OPFS handles...");
         _opfs_init(handles);
 
         log("Running tests...");
-        await exitPromise;
+        // Race against timeout to prevent hanging Worker.
+        const timeout = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("test execution timeout")), RUN_TIMEOUT_MS)
+        );
+        await Promise.race([exitPromise, timeout]);
         log("Go program exited.");
     } catch (e) {
-        postMessage({ type: "error", text: e.message + "\n" + e.stack });
+        postMessage({ type: "error", text: e.message + "\n" + (e.stack || "") });
     }
 }
 
-self.onmessage = function(e) {
-    if (e.data.type === "run") {
-        if (e.data.args) {
-            self._testArgs = e.data.args;
-        }
-        run();
-    }
-};
-
+// Single entry point: auto-start on Worker creation.
+// The onmessage handler is for future use (e.g., passing args before start).
 run();

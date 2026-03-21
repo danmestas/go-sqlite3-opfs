@@ -5,6 +5,8 @@ import (
 )
 
 // Stats holds atomic performance counters. Zero allocation on read.
+// Snapshot and Reset are best-effort (not atomic across fields) — acceptable
+// because Go WASM is single-threaded, so no concurrent modifications occur.
 type Stats struct {
 	Reads        atomic.Int64
 	Writes       atomic.Int64
@@ -16,10 +18,10 @@ type Stats struct {
 	FlushTimeNs  atomic.Int64
 }
 
-// Snapshot returns a non-atomic copy of all counters.
+// StatsSnapshot is a non-atomic copy of all counters.
 type StatsSnapshot struct {
-	Reads, Writes, Flushes             int64
-	BytesRead, BytesWritten            int64
+	Reads, Writes, Flushes               int64
+	BytesRead, BytesWritten              int64
 	ReadTimeNs, WriteTimeNs, FlushTimeNs int64
 }
 

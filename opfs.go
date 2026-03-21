@@ -3,6 +3,7 @@
 package opfsvfs
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -79,7 +80,7 @@ func (v *opfsVFS) Access(name string, flags vfs.AccessFlag) (bool, error) {
 		// File "exists" if handle is registered and has data.
 		size, err := h.GetSize()
 		if err != nil {
-			return false, nil
+			return false, err
 		}
 		return size > 0, nil
 	}
@@ -96,6 +97,9 @@ func (v *opfsVFS) FullPathname(name string) (string, error) {
 func (f *opfsFile) ReadAt(b []byte, off int64) (int, error) {
 	if f.handle == nil {
 		panic("opfsvfs: ReadAt on nil handle")
+	}
+	if f.stats == nil {
+		panic("opfsvfs: ReadAt on file with nil stats")
 	}
 
 	start := time.Now()
@@ -117,6 +121,9 @@ func (f *opfsFile) WriteAt(b []byte, off int64) (int, error) {
 	if f.handle == nil {
 		panic("opfsvfs: WriteAt on nil handle")
 	}
+	if f.stats == nil {
+		panic("opfsvfs: WriteAt on file with nil stats")
+	}
 
 	start := time.Now()
 	n, err := f.handle.Write(b, off)
@@ -126,6 +133,12 @@ func (f *opfsFile) WriteAt(b []byte, off int64) (int, error) {
 	f.stats.BytesWritten.Add(int64(n))
 	f.stats.WriteTimeNs.Add(dur.Nanoseconds())
 	f.observer.OnWrite(f.name, off, n, dur, err)
+
+	// Postcondition: a short write without error is a data corruption vector.
+	// SQLite expects writes to be complete or return an error.
+	if n < len(b) && err == nil {
+		return n, fmt.Errorf("opfsvfs: short write: wrote %d of %d bytes", n, len(b))
+	}
 
 	return n, err
 }
@@ -174,6 +187,8 @@ func (f *opfsFile) CheckReservedLock() (bool, error) {
 
 func (f *opfsFile) LockState() vfs.LockLevel { return f.lock }
 
+// SectorSize returns 4096: conservative default matching common filesystem block
+// sizes. OPFS does not expose its internal block size.
 func (f *opfsFile) SectorSize() int { return 4096 }
 
 func (f *opfsFile) DeviceCharacteristics() vfs.DeviceCharacteristic {

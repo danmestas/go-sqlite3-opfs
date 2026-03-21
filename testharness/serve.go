@@ -3,7 +3,9 @@
 package testharness
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 )
@@ -38,7 +40,11 @@ func (s *Server) Start() {
 		w.Header().Set("Cross-Origin-Embedder-Policy", "require-corp")
 		fs.ServeHTTP(w, r)
 	})
-	go http.Serve(s.ln, handler)
+	go func() {
+		if err := http.Serve(s.ln, handler); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Printf("testharness: serve error: %v", err)
+		}
+	}()
 }
 
 // Close stops the server.

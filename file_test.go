@@ -69,7 +69,10 @@ func TestFileSizeGrowsWithWrites(t *testing.T) {
 	if _, err := f.WriteAt(data, 0); err != nil {
 		t.Fatalf("WriteAt: %v", err)
 	}
-	size, _ := f.Size()
+	size, err := f.Size()
+	if err != nil {
+		t.Fatalf("Size: %v", err)
+	}
 	if size != int64(len(data)) {
 		t.Fatalf("Size: got %d, want %d", size, len(data))
 	}
@@ -83,7 +86,10 @@ func TestFileTruncate(t *testing.T) {
 	if err := f.Truncate(5); err != nil {
 		t.Fatalf("Truncate: %v", err)
 	}
-	size, _ := f.Size()
+	size, err := f.Size()
+	if err != nil {
+		t.Fatalf("Size: %v", err)
+	}
 	if size != 5 {
 		t.Fatalf("Size after Truncate: got %d, want 5", size)
 	}

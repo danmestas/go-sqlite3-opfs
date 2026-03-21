@@ -56,16 +56,27 @@ func TestTortureRapidOpenClose(t *testing.T) {
 		if _, err := db.Exec("INSERT INTO t(v) VALUES(?)", i); err != nil {
 			t.Fatalf("Cycle %d INSERT: %v", i, err)
 		}
-		db.Close()
+		if err := db.Close(); err != nil {
+			t.Fatalf("Cycle %d Close: %v", i, err)
+		}
 		if (i+1)%10 == 0 {
 			t.Logf("  completed %d iterations...", i+1)
 		}
 	}
-	db, _ := sql.Open("sqlite3", "file:test.db?vfs=opfs")
+	db, err := sql.Open("sqlite3", "file:test.db?vfs=opfs")
+	if err != nil {
+		t.Fatalf("Final Open: %v", err)
+	}
 	db.SetMaxOpenConns(1)
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Final Close: %v", err)
+		}
+	}()
 	var count int
-	db.QueryRow("SELECT count(*) FROM t").Scan(&count)
+	if err := db.QueryRow("SELECT count(*) FROM t").Scan(&count); err != nil {
+		t.Fatalf("Final SELECT count: %v", err)
+	}
 	if count != 50 {
 		t.Fatalf("count after 50 cycles: got %d, want 50", count)
 	}
@@ -105,11 +116,20 @@ func TestTortureJournalRollback(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO t(status) VALUES('original')"); err != nil {
 		t.Fatalf("INSERT: %v", err)
 	}
-	tx, _ := db.Begin()
-	tx.Exec("UPDATE t SET status='modified' WHERE id=1")
-	tx.Rollback()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if _, err := tx.Exec("UPDATE t SET status='modified' WHERE id=1"); err != nil {
+		t.Fatalf("UPDATE: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
 	var status string
-	db.QueryRow("SELECT status FROM t WHERE id=1").Scan(&status)
+	if err := db.QueryRow("SELECT status FROM t WHERE id=1").Scan(&status); err != nil {
+		t.Fatalf("SELECT: %v", err)
+	}
 	if status != "original" {
 		t.Fatalf("After rollback: got %q, want %q", status, "original")
 	}
