@@ -9,151 +9,130 @@ import (
 	"github.com/ncruces/go-sqlite3/vfs"
 )
 
-func TestVFSOpenDatabase(t *testing.T) {
-	// Test opening a main database file
-	name := "test-vfs-open-db"
+// truncateAll resets all OPFS files to zero for a clean test state.
+func truncateAll(t *testing.T) {
+	t.Helper()
+	for name, h := range globalVFS.handles {
+		if err := h.Truncate(0); err != nil {
+			t.Fatalf("Truncate %s: %v", name, err)
+		}
+	}
+}
 
-	f, flags, err := globalVFS.Open(name, vfs.OPEN_MAIN_DB|vfs.OPEN_CREATE|vfs.OPEN_READWRITE)
+func TestVFSOpenMainDB(t *testing.T) {
+	truncateAll(t)
+	f, flags, err := globalVFS.Open("test.db", vfs.OPEN_MAIN_DB|vfs.OPEN_CREATE|vfs.OPEN_READWRITE)
 	if err != nil {
-		t.Fatalf("Open(%q, OPEN_MAIN_DB|OPEN_CREATE|OPEN_READWRITE): %v", name, err)
+		t.Fatalf("Open main DB: %v", err)
 	}
 	if f == nil {
-		t.Fatalf("Open(%q): got nil file", name)
+		t.Fatal("Open main DB: returned nil file")
 	}
-
-	// Verify OPEN_MEMORY flag is set (indicates we handle journals in-memory)
-	if flags&vfs.OPEN_MEMORY == 0 {
-		t.Fatalf("Open(%q): flags=%d, missing OPEN_MEMORY flag", name, flags)
+	// Should NOT have OPEN_MEMORY (files are in OPFS)
+	if flags&vfs.OPEN_MEMORY != 0 {
+		t.Error("Open main DB: unexpected OPEN_MEMORY flag")
 	}
+	f.Close()
+}
 
-	// Cleanup
-	t.Cleanup(func() {
-		f.Close()
-		globalVFS.Delete(name, false)
-	})
+func TestVFSOpenJournal(t *testing.T) {
+	truncateAll(t)
+	f, _, err := globalVFS.Open("test.db-journal", vfs.OPEN_MAIN_JOURNAL|vfs.OPEN_CREATE|vfs.OPEN_READWRITE)
+	if err != nil {
+		t.Fatalf("Open journal: %v", err)
+	}
+	if f == nil {
+		t.Fatal("Open journal: returned nil file")
+	}
+	f.Close()
+}
+
+func TestVFSOpenWAL(t *testing.T) {
+	truncateAll(t)
+	f, _, err := globalVFS.Open("test.db-wal", vfs.OPEN_WAL|vfs.OPEN_CREATE|vfs.OPEN_READWRITE)
+	if err != nil {
+		t.Fatalf("Open WAL: %v", err)
+	}
+	if f == nil {
+		t.Fatal("Open WAL: returned nil file")
+	}
+	f.Close()
 }
 
 func TestVFSOpenTempJournal(t *testing.T) {
-	// Test opening a temp journal (should return SliceFile with OPEN_MEMORY)
-	name := ""
-
-	f, flags, err := globalVFS.Open(name, vfs.OPEN_TEMP_JOURNAL)
+	f, flags, err := globalVFS.Open("", vfs.OPEN_TEMP_JOURNAL|vfs.OPEN_CREATE|vfs.OPEN_READWRITE)
 	if err != nil {
-		t.Fatalf("Open(%q, OPEN_TEMP_JOURNAL): %v", name, err)
+		t.Fatalf("Open temp journal: %v", err)
 	}
 	if f == nil {
-		t.Fatalf("Open(%q, OPEN_TEMP_JOURNAL): got nil file", name)
+		t.Fatal("Open temp journal: returned nil file")
 	}
-
-	// Verify OPEN_MEMORY flag is set
 	if flags&vfs.OPEN_MEMORY == 0 {
-		t.Fatalf("Open(%q, OPEN_TEMP_JOURNAL): flags=%d, missing OPEN_MEMORY flag", name, flags)
+		t.Error("Open temp journal: expected OPEN_MEMORY flag")
 	}
-
-	// Cleanup
-	t.Cleanup(func() {
-		f.Close()
-	})
+	f.Close()
 }
 
-func TestVFSOpenNonDatabase(t *testing.T) {
-	// Test opening a non-database file (should return CANTOPEN)
-	name := "test-vfs-open-non-db"
-
-	// Try to open with flags that aren't a database
-	f, _, err := globalVFS.Open(name, vfs.OPEN_CREATE|vfs.OPEN_READWRITE)
+func TestVFSOpenUnknown(t *testing.T) {
+	_, _, err := globalVFS.Open("nonexistent.db", vfs.OPEN_MAIN_DB|vfs.OPEN_CREATE|vfs.OPEN_READWRITE)
 	if err != sqlite3.CANTOPEN {
-		t.Fatalf("Open(%q) with non-database flags: got error %v, want CANTOPEN", name, err)
-	}
-	if f != nil {
-		t.Fatalf("Open(%q) with non-database flags: got file %v, want nil", name, f)
+		t.Fatalf("Open unknown: got %v, want CANTOPEN", err)
 	}
 }
 
 func TestVFSDelete(t *testing.T) {
-	// Test deleting a file
-	name := "test-vfs-delete"
-
-	// Open to acquire a slot
-	f, _, err := globalVFS.Open(name, vfs.OPEN_MAIN_DB|vfs.OPEN_CREATE|vfs.OPEN_READWRITE)
-	if err != nil {
-		t.Fatalf("Open(%q): %v", name, err)
+	truncateAll(t)
+	h := globalVFS.handles["test.db"]
+	// Write data so file "exists"
+	if _, err := h.Write([]byte("data"), 0); err != nil {
+		t.Fatalf("Write: %v", err)
 	}
-	if f == nil {
-		t.Fatalf("Open(%q): got nil file", name)
+	// Delete truncates to zero
+	if err := globalVFS.Delete("test.db", false); err != nil {
+		t.Fatalf("Delete: %v", err)
 	}
-	f.Close()
-
-	// Verify pool has it
-	if !globalPool.Has(name) {
-		t.Fatalf("Has(%q): returned false after Open", name)
-	}
-
-	// Delete it
-	err = globalVFS.Delete(name, false)
-	if err != nil {
-		t.Fatalf("Delete(%q): %v", name, err)
-	}
-
-	// Verify pool no longer has it
-	if globalPool.Has(name) {
-		t.Fatalf("Has(%q): returned true after Delete", name)
+	size, _ := h.GetSize()
+	if size != 0 {
+		t.Fatalf("After Delete: size=%d, want 0", size)
 	}
 }
 
 func TestVFSAccess(t *testing.T) {
-	// Test Access method
-	name := "test-vfs-access"
-
-	// Before acquiring, Access should return false
-	exists, err := globalVFS.Access(name, vfs.ACCESS_EXISTS)
+	truncateAll(t)
+	// Empty file: ACCESS_EXISTS should return false
+	exists, err := globalVFS.Access("test.db", vfs.ACCESS_EXISTS)
 	if err != nil {
-		t.Fatalf("Access(%q) before acquire: %v", name, err)
+		t.Fatalf("Access: %v", err)
 	}
 	if exists {
-		t.Fatalf("Access(%q) before acquire: got true, want false", name)
+		t.Error("Access empty file: got true, want false")
 	}
-
-	// Acquire a name
-	_, _, err = globalPool.Acquire(name)
-	if err != nil {
-		t.Fatalf("Acquire(%q): %v", name, err)
+	// Write data
+	h := globalVFS.handles["test.db"]
+	if _, err := h.Write([]byte("data"), 0); err != nil {
+		t.Fatalf("Write: %v", err)
 	}
-
-	// After acquiring, Access should return true
-	exists, err = globalVFS.Access(name, vfs.ACCESS_EXISTS)
+	// Now should exist
+	exists, err = globalVFS.Access("test.db", vfs.ACCESS_EXISTS)
 	if err != nil {
-		t.Fatalf("Access(%q) after acquire: %v", name, err)
+		t.Fatalf("Access: %v", err)
 	}
 	if !exists {
-		t.Fatalf("Access(%q) after acquire: got false, want true", name)
+		t.Error("Access with data: got false, want true")
 	}
-
-	// Release it
-	err = globalPool.Release(name)
-	if err != nil {
-		t.Fatalf("Release(%q): %v", name, err)
-	}
-
-	// After releasing, Access should return false
-	exists, err = globalVFS.Access(name, vfs.ACCESS_EXISTS)
-	if err != nil {
-		t.Fatalf("Access(%q) after release: %v", name, err)
-	}
+	// Unregistered name: always false
+	exists, _ = globalVFS.Access("nope.db", vfs.ACCESS_EXISTS)
 	if exists {
-		t.Fatalf("Access(%q) after release: got true, want false", name)
+		t.Error("Access unregistered: got true, want false")
 	}
 }
 
 func TestVFSFullPathname(t *testing.T) {
-	// Test FullPathname returns input unchanged
-	name := "test-vfs-fullpathname"
-
-	fullPath, err := globalVFS.FullPathname(name)
+	name, err := globalVFS.FullPathname("test.db")
 	if err != nil {
-		t.Fatalf("FullPathname(%q): %v", name, err)
+		t.Fatalf("FullPathname: %v", err)
 	}
-	if fullPath != name {
-		t.Fatalf("FullPathname(%q): got %q, want %q", name, fullPath, name)
+	if name != "test.db" {
+		t.Fatalf("FullPathname: got %q, want %q", name, "test.db")
 	}
 }

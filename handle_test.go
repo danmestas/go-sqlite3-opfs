@@ -7,28 +7,20 @@ import (
 	"testing"
 )
 
-// acquireTestHandle obtains a handle from the global pool for the given test name.
-// It registers a cleanup to release the handle when the test finishes.
-func acquireTestHandle(t *testing.T, name string) Handle {
+func getTestHandle(t *testing.T) Handle {
 	t.Helper()
-	if globalPool == nil {
-		t.Fatal("globalPool is nil — _opfs_pool_init was not called")
+	h, ok := globalVFS.handles["test.db"]
+	if !ok {
+		t.Fatal("test.db handle not registered")
 	}
-	h, _, err := globalPool.Acquire(name)
-	if err != nil {
-		t.Fatalf("Acquire(%q): %v", name, err)
+	if err := h.Truncate(0); err != nil {
+		t.Fatalf("Truncate: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := globalPool.Release(name); err != nil {
-			t.Errorf("Release(%q): %v", name, err)
-		}
-	})
 	return h
 }
 
 func TestHandleReadWriteRoundTrip(t *testing.T) {
-	h := acquireTestHandle(t, "test-handle-rw")
-
+	h := getTestHandle(t)
 	data := []byte("hello opfs")
 	n, err := h.Write(data, 0)
 	if err != nil {
@@ -37,28 +29,22 @@ func TestHandleReadWriteRoundTrip(t *testing.T) {
 	if n != len(data) {
 		t.Fatalf("Write: wrote %d, want %d", n, len(data))
 	}
-
 	buf := make([]byte, len(data))
 	n, err = h.Read(buf, 0)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if n != len(data) {
-		t.Fatalf("Read: read %d, want %d", n, len(data))
-	}
-	if !bytes.Equal(buf, data) {
-		t.Fatalf("Read: got %q, want %q", buf, data)
+	if !bytes.Equal(buf[:n], data) {
+		t.Fatalf("Read: got %q, want %q", buf[:n], data)
 	}
 }
 
 func TestHandleGetSize(t *testing.T) {
-	h := acquireTestHandle(t, "test-handle-size")
-
+	h := getTestHandle(t)
 	data := []byte("size check")
 	if _, err := h.Write(data, 0); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-
 	size, err := h.GetSize()
 	if err != nil {
 		t.Fatalf("GetSize: %v", err)
@@ -69,17 +55,13 @@ func TestHandleGetSize(t *testing.T) {
 }
 
 func TestHandleTruncate(t *testing.T) {
-	h := acquireTestHandle(t, "test-handle-trunc")
-
-	data := []byte("truncate me please")
-	if _, err := h.Write(data, 0); err != nil {
+	h := getTestHandle(t)
+	if _, err := h.Write([]byte("truncate me"), 0); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-
 	if err := h.Truncate(5); err != nil {
 		t.Fatalf("Truncate: %v", err)
 	}
-
 	size, err := h.GetSize()
 	if err != nil {
 		t.Fatalf("GetSize: %v", err)
@@ -90,22 +72,17 @@ func TestHandleTruncate(t *testing.T) {
 }
 
 func TestHandleFlush(t *testing.T) {
-	h := acquireTestHandle(t, "test-handle-flush")
-
-	data := []byte("flush test")
-	if _, err := h.Write(data, 0); err != nil {
+	h := getTestHandle(t)
+	if _, err := h.Write([]byte("flush test"), 0); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-
 	if err := h.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
 }
 
 func TestHandleReadPastEOF(t *testing.T) {
-	h := acquireTestHandle(t, "test-handle-eof")
-
-	// File is empty after acquire+release (truncated to 0). Read past EOF.
+	h := getTestHandle(t)
 	buf := make([]byte, 16)
 	n, err := h.Read(buf, 1000)
 	if err != nil {

@@ -61,10 +61,22 @@ func (f *FaultHandle) Close() error {
 	return f.inner.Close()
 }
 
+func getFaultTestHandle(t *testing.T) Handle {
+	t.Helper()
+	h, ok := globalVFS.handles["test.db"]
+	if !ok {
+		t.Fatal("test.db handle not registered")
+	}
+	if err := h.Truncate(0); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	return h
+}
+
 // TestFaultHandleShortRead tests that FaultHandle with shortRead=5
 // returns at most 5 bytes even when asked for more.
 func TestFaultHandleShortRead(t *testing.T) {
-	inner := acquireTestHandle(t, "test-fault-short-read")
+	inner := getFaultTestHandle(t)
 
 	// Write 10 bytes
 	data := []byte("0123456789")
@@ -105,7 +117,7 @@ func TestFaultHandleShortRead(t *testing.T) {
 // TestFaultHandleWriteFailure tests that FaultHandle with writeErr
 // returns the error on Write.
 func TestFaultHandleWriteFailure(t *testing.T) {
-	inner := acquireTestHandle(t, "test-fault-write-fail")
+	inner := getFaultTestHandle(t)
 
 	expectedErr := errors.New("simulated write failure")
 
@@ -134,7 +146,7 @@ func TestFaultHandleWriteFailure(t *testing.T) {
 // TestFaultHandleFlushFailure tests that FaultHandle with flushErr
 // returns the error on Flush.
 func TestFaultHandleFlushFailure(t *testing.T) {
-	inner := acquireTestHandle(t, "test-fault-flush-fail")
+	inner := getFaultTestHandle(t)
 
 	// Write some data first
 	data := []byte("data to flush")
@@ -166,7 +178,7 @@ func TestFaultHandleFlushFailure(t *testing.T) {
 // TestFaultHandleReadError tests that FaultHandle with readErr
 // returns the error on Read.
 func TestFaultHandleReadError(t *testing.T) {
-	inner := acquireTestHandle(t, "test-fault-read-error")
+	inner := getFaultTestHandle(t)
 
 	// Write some data first
 	data := []byte("data to read")
@@ -201,7 +213,7 @@ func TestFaultHandleReadError(t *testing.T) {
 
 // TestFaultHandleCombinedFaults tests multiple faults in sequence.
 func TestFaultHandleCombinedFaults(t *testing.T) {
-	inner := acquireTestHandle(t, "test-fault-combined")
+	inner := getFaultTestHandle(t)
 
 	// Test 1: Write succeeds
 	fh := &FaultHandle{inner: inner}

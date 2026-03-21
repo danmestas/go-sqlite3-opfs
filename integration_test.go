@@ -10,319 +10,160 @@ import (
 	_ "github.com/ncruces/go-sqlite3/embed"
 )
 
-// TestIntegrationBasicRoundTrip tests opening a database, creating a table,
-// inserting data, and selecting it back using database/sql.
-func TestIntegrationBasicRoundTrip(t *testing.T) {
-	dbName := "file:test-integration-basic.db?vfs=opfs&nolock=1"
-
-	db, err := sql.Open("sqlite3", dbName)
+func openTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	truncateAll(t)
+	db, err := sql.Open("sqlite3", "file:test.db?vfs=opfs")
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { db.Close() })
+	return db
+}
 
-	t.Cleanup(func() {
-		db.Close()
-		globalVFS.Delete("test-integration-basic.db", false)
-	})
-
-	// CREATE TABLE
-	_, err = db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
-	if err != nil {
+func TestIntegrationBasicCRUD(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec("CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT)"); err != nil {
 		t.Fatalf("CREATE TABLE: %v", err)
 	}
-
-	// INSERT
-	_, err = db.Exec("INSERT INTO users (name) VALUES (?)", "Alice")
-	if err != nil {
+	if _, err := db.Exec("INSERT INTO t(name) VALUES(?)", "alice"); err != nil {
 		t.Fatalf("INSERT: %v", err)
 	}
-
-	// SELECT
-	var id int
 	var name string
-	err = db.QueryRow("SELECT id, name FROM users WHERE name = ?", "Alice").Scan(&id, &name)
-	if err != nil {
+	if err := db.QueryRow("SELECT name FROM t WHERE id=1").Scan(&name); err != nil {
 		t.Fatalf("SELECT: %v", err)
 	}
-
-	if id != 1 {
-		t.Errorf("SELECT: got id=%d, want 1", id)
-	}
-	if name != "Alice" {
-		t.Errorf("SELECT: got name=%q, want %q", name, "Alice")
+	if name != "alice" {
+		t.Fatalf("SELECT: got %q, want %q", name, "alice")
 	}
 }
 
-// TestIntegrationPersistence tests that data persists after closing and
-// reopening the same database.
 func TestIntegrationPersistence(t *testing.T) {
-	dbName := "file:test-integration-persist.db?vfs=opfs&nolock=1"
-
-	// First connection: create table and insert data
-	db1, err := sql.Open("sqlite3", dbName)
+	truncateAll(t)
+	// Open, write, close
+	db, err := sql.Open("sqlite3", "file:test.db?vfs=opfs")
 	if err != nil {
-		t.Fatalf("sql.Open (first): %v", err)
+		t.Fatalf("sql.Open: %v", err)
 	}
-
-	_, err = db1.Exec("CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, price REAL)")
-	if err != nil {
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("CREATE TABLE t(v TEXT)"); err != nil {
 		t.Fatalf("CREATE TABLE: %v", err)
 	}
-
-	_, err = db1.Exec("INSERT INTO products (name, price) VALUES (?, ?)", "Widget", 9.99)
-	if err != nil {
+	if _, err := db.Exec("INSERT INTO t(v) VALUES('persistent')"); err != nil {
 		t.Fatalf("INSERT: %v", err)
 	}
+	db.Close()
 
-	err = db1.Close()
+	// Reopen, read
+	db2, err := sql.Open("sqlite3", "file:test.db?vfs=opfs")
 	if err != nil {
-		t.Fatalf("Close (first): %v", err)
+		t.Fatalf("sql.Open reopen: %v", err)
 	}
-
-	// Second connection: reopen and verify data persists
-	db2, err := sql.Open("sqlite3", dbName)
-	if err != nil {
-		t.Fatalf("sql.Open (second): %v", err)
-	}
-
-	t.Cleanup(func() {
-		db2.Close()
-		globalVFS.Delete("test-integration-persist.db", false)
-	})
-
-	var id int
-	var name string
-	var price float64
-	err = db2.QueryRow("SELECT id, name, price FROM products WHERE name = ?", "Widget").Scan(&id, &name, &price)
-	if err != nil {
+	db2.SetMaxOpenConns(1)
+	defer db2.Close()
+	var v string
+	if err := db2.QueryRow("SELECT v FROM t").Scan(&v); err != nil {
 		t.Fatalf("SELECT after reopen: %v", err)
 	}
-
-	if id != 1 {
-		t.Errorf("After reopen: got id=%d, want 1", id)
-	}
-	if name != "Widget" {
-		t.Errorf("After reopen: got name=%q, want %q", name, "Widget")
-	}
-	if price != 9.99 {
-		t.Errorf("After reopen: got price=%f, want 9.99", price)
+	if v != "persistent" {
+		t.Fatalf("SELECT: got %q, want %q", v, "persistent")
 	}
 }
 
-// TestIntegrationMultipleDatabases tests opening two databases simultaneously
-// with different names (different slots).
-func TestIntegrationMultipleDatabases(t *testing.T) {
-	dbName1 := "file:test-integration-multi-1.db?vfs=opfs&nolock=1"
-	dbName2 := "file:test-integration-multi-2.db?vfs=opfs&nolock=1"
-
-	db1, err := sql.Open("sqlite3", dbName1)
-	if err != nil {
-		t.Fatalf("sql.Open (db1): %v", err)
-	}
-
-	db2, err := sql.Open("sqlite3", dbName2)
-	if err != nil {
-		t.Fatalf("sql.Open (db2): %v", err)
-	}
-
-	t.Cleanup(func() {
-		db1.Close()
-		db2.Close()
-		globalVFS.Delete("test-integration-multi-1.db", false)
-		globalVFS.Delete("test-integration-multi-2.db", false)
-	})
-
-	// Create tables in both databases
-	_, err = db1.Exec("CREATE TABLE data1 (value TEXT)")
-	if err != nil {
-		t.Fatalf("CREATE TABLE (db1): %v", err)
-	}
-
-	_, err = db2.Exec("CREATE TABLE data2 (value TEXT)")
-	if err != nil {
-		t.Fatalf("CREATE TABLE (db2): %v", err)
-	}
-
-	// Insert different data in each database
-	_, err = db1.Exec("INSERT INTO data1 (value) VALUES (?)", "database-one")
-	if err != nil {
-		t.Fatalf("INSERT (db1): %v", err)
-	}
-
-	_, err = db2.Exec("INSERT INTO data2 (value) VALUES (?)", "database-two")
-	if err != nil {
-		t.Fatalf("INSERT (db2): %v", err)
-	}
-
-	// Verify data in db1
-	var value1 string
-	err = db1.QueryRow("SELECT value FROM data1").Scan(&value1)
-	if err != nil {
-		t.Fatalf("SELECT (db1): %v", err)
-	}
-	if value1 != "database-one" {
-		t.Errorf("db1: got value=%q, want %q", value1, "database-one")
-	}
-
-	// Verify data in db2
-	var value2 string
-	err = db2.QueryRow("SELECT value FROM data2").Scan(&value2)
-	if err != nil {
-		t.Fatalf("SELECT (db2): %v", err)
-	}
-	if value2 != "database-two" {
-		t.Errorf("db2: got value=%q, want %q", value2, "database-two")
-	}
-}
-
-// TestIntegrationBulkInsertAndCount tests inserting 100 rows and verifying
-// the count matches.
-func TestIntegrationBulkInsertAndCount(t *testing.T) {
-	dbName := "file:test-integration-bulk.db?vfs=opfs&nolock=1"
-
-	db, err := sql.Open("sqlite3", dbName)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-
-	t.Cleanup(func() {
-		db.Close()
-		globalVFS.Delete("test-integration-bulk.db", false)
-	})
-
-	// CREATE TABLE
-	_, err = db.Exec("CREATE TABLE numbers (id INTEGER PRIMARY KEY, value INTEGER)")
-	if err != nil {
+func TestIntegrationBulkInsert(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec("CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER)"); err != nil {
 		t.Fatalf("CREATE TABLE: %v", err)
 	}
-
-	// INSERT 100 rows
-	const rowCount = 100
-	for i := 1; i <= rowCount; i++ {
-		_, err = db.Exec("INSERT INTO numbers (value) VALUES (?)", i*10)
-		if err != nil {
-			t.Fatalf("INSERT row %d: %v", i, err)
+	for i := 0; i < 100; i++ {
+		if _, err := db.Exec("INSERT INTO t(v) VALUES(?)", i*2); err != nil {
+			t.Fatalf("INSERT %d: %v", i, err)
 		}
 	}
-
-	// SELECT count
 	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM numbers").Scan(&count)
-	if err != nil {
-		t.Fatalf("SELECT COUNT: %v", err)
+	if err := db.QueryRow("SELECT count(*) FROM t").Scan(&count); err != nil {
+		t.Fatalf("SELECT count: %v", err)
 	}
-
-	if count != rowCount {
-		t.Errorf("SELECT COUNT: got %d, want %d", count, rowCount)
-	}
-
-	// Verify a few specific values
-	var value int
-	err = db.QueryRow("SELECT value FROM numbers WHERE id = ?", 50).Scan(&value)
-	if err != nil {
-		t.Fatalf("SELECT value for id=50: %v", err)
-	}
-	if value != 500 {
-		t.Errorf("SELECT value for id=50: got %d, want 500", value)
+	if count != 100 {
+		t.Fatalf("count: got %d, want 100", count)
 	}
 }
 
-// TestIntegrationTransactionRollback tests that a ROLLBACK discards changes.
 func TestIntegrationTransactionRollback(t *testing.T) {
-	dbName := "file:test-integration-rollback.db?vfs=opfs&nolock=1"
-
-	db, err := sql.Open("sqlite3", dbName)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-
-	t.Cleanup(func() {
-		db.Close()
-		globalVFS.Delete("test-integration-rollback.db", false)
-	})
-
-	// CREATE TABLE
-	_, err = db.Exec("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
-	if err != nil {
+	db := openTestDB(t)
+	if _, err := db.Exec("CREATE TABLE t(v TEXT)"); err != nil {
 		t.Fatalf("CREATE TABLE: %v", err)
 	}
-
-	// BEGIN transaction
 	tx, err := db.Begin()
 	if err != nil {
-		t.Fatalf("BEGIN: %v", err)
+		t.Fatalf("Begin: %v", err)
 	}
-
-	// INSERT within transaction
-	_, err = tx.Exec("INSERT INTO items (name) VALUES (?)", "temp-item")
-	if err != nil {
-		t.Fatalf("INSERT in transaction: %v", err)
+	if _, err := tx.Exec("INSERT INTO t(v) VALUES('rolled back')"); err != nil {
+		t.Fatalf("INSERT: %v", err)
 	}
-
-	// ROLLBACK
-	err = tx.Rollback()
-	if err != nil {
-		t.Fatalf("ROLLBACK: %v", err)
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
 	}
-
-	// Verify item was NOT inserted
 	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM items WHERE name = ?", "temp-item").Scan(&count)
-	if err != nil {
-		t.Fatalf("SELECT COUNT after rollback: %v", err)
+	if err := db.QueryRow("SELECT count(*) FROM t").Scan(&count); err != nil {
+		t.Fatalf("SELECT count: %v", err)
 	}
-
 	if count != 0 {
-		t.Errorf("After ROLLBACK: found %d rows, want 0", count)
+		t.Fatalf("count after rollback: got %d, want 0", count)
 	}
 }
 
-// TestIntegrationTransactionCommit tests that a COMMIT persists changes.
 func TestIntegrationTransactionCommit(t *testing.T) {
-	dbName := "file:test-integration-commit.db?vfs=opfs&nolock=1"
-
-	db, err := sql.Open("sqlite3", dbName)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-
-	t.Cleanup(func() {
-		db.Close()
-		globalVFS.Delete("test-integration-commit.db", false)
-	})
-
-	// CREATE TABLE
-	_, err = db.Exec("CREATE TABLE orders (id INTEGER PRIMARY KEY, item TEXT)")
-	if err != nil {
+	db := openTestDB(t)
+	if _, err := db.Exec("CREATE TABLE t(v TEXT)"); err != nil {
 		t.Fatalf("CREATE TABLE: %v", err)
 	}
-
-	// BEGIN transaction
 	tx, err := db.Begin()
 	if err != nil {
-		t.Fatalf("BEGIN: %v", err)
+		t.Fatalf("Begin: %v", err)
 	}
+	if _, err := tx.Exec("INSERT INTO t(v) VALUES('committed')"); err != nil {
+		t.Fatalf("INSERT: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	var v string
+	if err := db.QueryRow("SELECT v FROM t").Scan(&v); err != nil {
+		t.Fatalf("SELECT: %v", err)
+	}
+	if v != "committed" {
+		t.Fatalf("SELECT: got %q, want %q", v, "committed")
+	}
+}
 
-	// INSERT within transaction
-	_, err = tx.Exec("INSERT INTO orders (item) VALUES (?)", "laptop")
-	if err != nil {
-		t.Fatalf("INSERT in transaction: %v", err)
+func TestIntegrationWALMode(t *testing.T) {
+	db := openTestDB(t)
+	// WAL requires exclusive locking when SharedMemory is nil
+	if _, err := db.Exec("PRAGMA locking_mode=EXCLUSIVE"); err != nil {
+		t.Fatalf("PRAGMA locking_mode: %v", err)
 	}
-
-	// COMMIT
-	err = tx.Commit()
-	if err != nil {
-		t.Fatalf("COMMIT: %v", err)
+	var mode string
+	if err := db.QueryRow("PRAGMA journal_mode=WAL").Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
 	}
-
-	// Verify item WAS inserted
-	var item string
-	err = db.QueryRow("SELECT item FROM orders WHERE id = ?", 1).Scan(&item)
-	if err != nil {
-		t.Fatalf("SELECT after commit: %v", err)
+	if mode != "wal" {
+		t.Fatalf("journal_mode: got %q, want %q", mode, "wal")
 	}
-
-	if item != "laptop" {
-		t.Errorf("After COMMIT: got item=%q, want %q", item, "laptop")
+	// Basic CRUD in WAL mode
+	if _, err := db.Exec("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)"); err != nil {
+		t.Fatalf("CREATE TABLE in WAL: %v", err)
 	}
+	if _, err := db.Exec("INSERT INTO t(v) VALUES('wal-data')"); err != nil {
+		t.Fatalf("INSERT in WAL: %v", err)
+	}
+	var v string
+	if err := db.QueryRow("SELECT v FROM t WHERE id=1").Scan(&v); err != nil {
+		t.Fatalf("SELECT in WAL: %v", err)
+	}
+	if v != "wal-data" {
+		t.Fatalf("SELECT: got %q, want %q", v, "wal-data")
+	}
+	t.Logf("WAL mode CRUD successful")
 }
